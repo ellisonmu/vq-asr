@@ -2,6 +2,7 @@ numpy
 torch
 openai-whisper
 datasets
+soundfile
 jiwer
 librosa
 scikit-learn

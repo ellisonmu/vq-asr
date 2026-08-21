@@ -20,24 +20,33 @@ class scalar:
         return q, scale, x_min
 
     def dequantize(x: np.ndarray, scale: float, x_min: float) -> np.ndarray:
-        return (q.astype(np.float32) / scale) + x_min
+        return (x.astype(np.float32) / scale) + x_min
 
 class vector_quantizer:
     def __init__(self, codebook: np.ndarray):
         self.codebook = codebook.astype(np.float32)
         self.K, self.d = codebook.shape
 
-    def quantizer(self, X: np.ndarray) -> np.ndarray:
+    def quantizer(self, X: np.ndarray, batch_size: int = 4096) -> np.ndarray:
         assert X.shape[1] == self.d, f"Expected vector dimension {self.d}, got {X.shape[1]}"
 
-        # C: (1, K, d)
-        diff = self.codebook[np.newaxis, :, :] - X[:, np.newaxis, :] 
-        distances = np.sum(diff ** 2, axis=2)
+        N = X.shape[0]
+        indices = np.empty(N, dtype=np.int32)
+        min_distances = np.empty(N, dtype=np.float32)
+        C_sq = np.sum(self.codebook ** 2, axis=1)  # (K,)
 
-        indices = np.argmin(distances, axis=1)
-        min_distances = np.min(distances, axis=1)
+        # batched, avoids materializing the (N, K, d) diff tensor
+        for start in range(0, N, batch_size):
+            end = min(start + batch_size, N)
+            Xb = X[start:end]
+            X_sq = np.sum(Xb ** 2, axis=1, keepdims=True)  # (b, 1)
+            cross = Xb @ self.codebook.T  # (b, K)
+            distances = X_sq + C_sq[np.newaxis, :] - 2 * cross
+            idx = np.argmin(distances, axis=1)
+            indices[start:end] = idx
+            min_distances[start:end] = distances[np.arange(end - start), idx]
 
-        return indices.astype(np.int32), min_distances
+        return indices, min_distances
 
     def dequantizer(self, indices: np.ndarray) -> np.ndarray:
         return self.codebook[indices]

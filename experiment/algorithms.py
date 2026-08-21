@@ -12,7 +12,10 @@ def kmeans(X, K, d=80, eps=1e-5, MAX_ITERATIONS=100):
     m = 0
     while m < MAX_ITERATIONS:
         for k in range(K):
-            C[k]= X[I==k].mean(axis=0)
+            mask = I == k
+            if np.any(mask):
+                C[k] = X[mask].mean(axis=0)
+            # else: no points assigned this iteration, keep previous centroid
         vq = vector_quantizer(C)
         I, D = vq.quantizer(X)
         error_prev = error_curr
