@@ -1,3 +1,9 @@
+# torch: plain `pip install -r requirements.txt` gives you the CPU build.
+# - Windows/Linux with an NVIDIA GPU: install CUDA build instead, e.g.
+#     pip install torch --index-url https://download.pytorch.org/whl/cu128
+#   (pick the cuXXX tag matching your driver: https://pytorch.org/get-started/locally/)
+# - Mac (Apple Silicon): the default pip build already includes MPS support,
+#   no special index needed - torch.device("mps") will be available.
 numpy
 torch
 openai-whisper

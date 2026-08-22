@@ -1,4 +1,12 @@
 import numpy as np
+import torch
+
+def get_device():
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 class scalar:
     def quantize(x: np.ndarray):
@@ -23,33 +31,43 @@ class scalar:
         return (x.astype(np.float32) / scale) + x_min
 
 class vector_quantizer:
-    def __init__(self, codebook: np.ndarray):
-        self.codebook = codebook.astype(np.float32)
-        self.K, self.d = codebook.shape
+    def __init__(self, codebook, device=None):
+        self.device = device or get_device()
+        if isinstance(codebook, torch.Tensor):
+            self.codebook = codebook.to(self.device, dtype=torch.float32)
+        else:
+            self.codebook = torch.as_tensor(np.asarray(codebook), dtype=torch.float32, device=self.device)
+        self.K, self.d = self.codebook.shape
 
-    def quantizer(self, X: np.ndarray, batch_size: int = 4096) -> np.ndarray:
-        assert X.shape[1] == self.d, f"Expected vector dimension {self.d}, got {X.shape[1]}"
+    def quantizer(self, X, batch_size: int = 16384, return_tensor: bool = False):
+        X_t = X.to(self.device, dtype=torch.float32) if isinstance(X, torch.Tensor) \
+            else torch.as_tensor(np.asarray(X), dtype=torch.float32, device=self.device)
+        assert X_t.shape[1] == self.d, f"Expected vector dimension {self.d}, got {X_t.shape[1]}"
 
-        N = X.shape[0]
-        indices = np.empty(N, dtype=np.int32)
-        min_distances = np.empty(N, dtype=np.float32)
-        C_sq = np.sum(self.codebook ** 2, axis=1)  # (K,)
+        N = X_t.shape[0]
+        indices = torch.empty(N, dtype=torch.int64, device=self.device)
+        min_distances = torch.empty(N, dtype=torch.float32, device=self.device)
+        C_sq = (self.codebook ** 2).sum(dim=1)  # (K,)
 
-        # batched, avoids materializing the (N, K, d) diff tensor
         for start in range(0, N, batch_size):
             end = min(start + batch_size, N)
-            Xb = X[start:end]
-            X_sq = np.sum(Xb ** 2, axis=1, keepdims=True)  # (b, 1)
+            Xb = X_t[start:end]
+            X_sq = (Xb ** 2).sum(dim=1, keepdim=True)  # (b, 1)
             cross = Xb @ self.codebook.T  # (b, K)
-            distances = X_sq + C_sq[np.newaxis, :] - 2 * cross
-            idx = np.argmin(distances, axis=1)
+            distances = X_sq + C_sq.unsqueeze(0) - 2 * cross
+            idx = torch.argmin(distances, dim=1)
             indices[start:end] = idx
-            min_distances[start:end] = distances[np.arange(end - start), idx]
+            min_distances[start:end] = distances.gather(1, idx.unsqueeze(1)).squeeze(1)
 
-        return indices, min_distances
+        if return_tensor:
+            return indices, min_distances
+        return indices.cpu().numpy().astype(np.int32), min_distances.cpu().numpy()
 
-    def dequantizer(self, indices: np.ndarray) -> np.ndarray:
-        return self.codebook[indices]
+    def dequantizer(self, indices):
+        idx_t = indices.to(self.device, dtype=torch.long) if isinstance(indices, torch.Tensor) \
+            else torch.as_tensor(np.asarray(indices), dtype=torch.long, device=self.device)
+        out = self.codebook[idx_t]
+        return out if isinstance(indices, torch.Tensor) else out.cpu().numpy()
 
 class mid_riser:
     def quantize(x_15: np.ndarray, target_bits: int = 8, m: int = 0):

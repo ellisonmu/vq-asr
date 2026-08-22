@@ -2,7 +2,8 @@ import io
 import numpy as np
 import jiwer
 import soundfile as sf
-from operations.quantization import vector_quantizer
+from tqdm import tqdm
+from operations.quantization import vector_quantizer, get_device
 from datasets import load_dataset, Audio
 from itertools import islice
 import whisper
@@ -48,7 +49,7 @@ def front_end(utterance, quantize=False, codebook=None):
 
 def extract_train_features():
     ds = load_split("train.clean.100", streaming=True)
-    train_subset = list(islice(ds, 5000))
+    train_subset = tqdm(islice(ds, 5000), total=5000, desc="extracting train features")
     return np.concatenate([front_end(u, quantize=False)[0].T for u in train_subset], axis=0)  # (total_frames, 80)
 
 def train(X, bitdepth=8):
@@ -57,10 +58,11 @@ def train(X, bitdepth=8):
 
 def evaluate(model, test_dataset, codebook):
     wer_hist, cer_hist = [], []
-    for utterance in test_dataset:
+    fp16 = model.device.type == "cuda"  # fp16 decoding is unsupported on cpu/mps
+    for utterance in tqdm(test_dataset, desc="evaluating"):
         mel_q, ref_norm = front_end(utterance, quantize=True, codebook=codebook)
         mel_torch = torch.from_numpy(mel_q).to(model.device)
-        options = whisper.DecodingOptions()
+        options = whisper.DecodingOptions(fp16=fp16)
         pred = whisper.decode(model, mel_torch, options)
         pred_norm = normalizer(pred.text)
         wer_hist.append(jiwer.wer(ref_norm, pred_norm))
@@ -84,7 +86,7 @@ def main():
     mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist = [], [], [], []
     bitdepth = list(range(1, 13))
     X = extract_train_features()
-    model = whisper.load_model("base").to("cuda" if torch.cuda.is_available() else "cpu")
+    model = whisper.load_model("base").to(get_device())
     test_dataset = load_split("test.clean").shuffle().select(range(1000))
     for b in bitdepth:
         codebook = train(X, b)
