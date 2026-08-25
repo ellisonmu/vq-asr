@@ -9,7 +9,9 @@ from itertools import islice
 import whisper
 from whisper.normalizers import EnglishTextNormalizer
 import torch
-from experiment.algorithms import kmeans
+from experiment.algorithms import kmeans, gmmem
+
+ALGORITHMS = {"kmeans": kmeans, "gmmem": gmmem}
 
 normalizer = EnglishTextNormalizer()
 
@@ -52,9 +54,9 @@ def extract_train_features():
     train_subset = tqdm(islice(ds, 5000), total=5000, desc="extracting train features")
     return np.concatenate([front_end(u, quantize=False)[0].T for u in train_subset], axis=0)  # (total_frames, 80)
 
-def train(X, bitdepth=8):
+def train(X, bitdepth=8, algorithm="kmeans"):
     K = 2**bitdepth
-    return kmeans(X, K)
+    return ALGORITHMS[algorithm](X, K)
 
 def evaluate(model, test_dataset, codebook):
     wer_hist, cer_hist = [], []
@@ -69,36 +71,41 @@ def evaluate(model, test_dataset, codebook):
         cer_hist.append(jiwer.cer(ref_norm, pred_norm))
     return np.mean(wer_hist), np.mean(cer_hist), np.std(wer_hist), np.std(cer_hist)
 
-def plot_sweep(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist):
+def plot_sweep(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist, algorithm="kmeans"):
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.errorbar(bitdepth, mean_wer_hist, yerr=std_wer_hist, label="WER", marker="o", capsize=3)
     ax.errorbar(bitdepth, mean_cer_hist, yerr=std_cer_hist, label="CER", marker="o", capsize=3)
     ax.set_xlabel("bit depth")
     ax.set_ylabel("error rate")
-    ax.set_title("WER / CER vs codebook bit depth")
+    ax.set_title(f"WER / CER vs codebook bit depth ({algorithm})")
     ax.legend()
     fig.tight_layout()
-    fig.savefig("experiment/wer_cer_sweep.png", dpi=150)
-    print("saved experiment/wer_cer_sweep.png")
+    out_path = f"experiment/wer_cer_sweep_{algorithm}.png"
+    fig.savefig(out_path, dpi=150)
+    print(f"saved {out_path}")
 
-def main():
+def main(algorithm="kmeans"):
     mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist = [], [], [], []
     bitdepth = list(range(1, 13))
     X = extract_train_features()
     model = whisper.load_model("base").to(get_device())
     test_dataset = load_split("test.clean").shuffle().select(range(1000))
     for b in bitdepth:
-        codebook = train(X, b)
+        codebook = train(X, b, algorithm=algorithm)
         wer_mean, cer_mean, wer_std, cer_std = evaluate(model, test_dataset, codebook)
         mean_wer_hist.append(wer_mean)
         mean_cer_hist.append(cer_mean)
         std_wer_hist.append(wer_std)
         std_cer_hist.append(cer_std)
-    plot_sweep(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist)
+    plot_sweep(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist, algorithm=algorithm)
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--algorithm", choices=list(ALGORITHMS), default="kmeans")
+    args = parser.parse_args()
+    main(algorithm=args.algorithm)
     
 
 

@@ -38,7 +38,7 @@ def kmeans(X, K, d=80, eps=1e-5, MAX_ITERATIONS=100, device=None):
     pbar.close()
     return C.cpu().numpy()
 
-def gmmem(X, K, d=80, eps=1e-5, MAX_ITERATIONS=100, device=None):
+def gmmem(X, K, d=80, eps=1e-5, MAX_ITERATIONS=100, device=None, batch_size=16384):
     device = device or get_device()
     X_t = torch.as_tensor(np.asarray(X), dtype=torch.float32, device=device)
     N = X_t.shape[0]
@@ -49,29 +49,47 @@ def gmmem(X, K, d=80, eps=1e-5, MAX_ITERATIONS=100, device=None):
     weights = torch.ones(K, device=device) / K
     ll_prev = float("-inf")
     m = 0
-    diff = X_t[:, None, :] - means[None, :, :]  # x_n - mu_k, (N, K, d)
+    log_2pi_d = d * np.log(2 * np.pi)
     pbar = tqdm(total=MAX_ITERATIONS, desc=f"gmmem K={K} ({device})")
     while m < MAX_ITERATIONS:
-        log_gaussian = -0.5 * torch.sum(diff**2 / variance[None] + torch.log(variance[None]), dim=2)
-        log_gaussian -= 0.5 * d * np.log(2 * np.pi)
-        assert log_gaussian.shape == (N, K), "incorrect gaussian matrix dimensions"
+        # diagonal-covariance Mahalanobis distance, expanded to avoid an (N, K, d) tensor:
+        # sum_d (x_d - mu_kd)^2 / var_kd = x^2 @ (1/var)^T - 2 x @ (mu/var)^T + sum_d mu_kd^2/var_kd
+        inv_var = 1.0 / variance                                    # (K, d)
+        mu_invvar = means * inv_var                                 # (K, d)
+        mu2_invvar_sum = (means ** 2 * inv_var).sum(dim=1)          # (K,)
+        log_var_sum = torch.log(variance).sum(dim=1)                # (K,)
+        log_weights = torch.log(weights)
 
-        log_numerator = torch.log(weights)[None, :] + log_gaussian
-        log_denominator = torch.logsumexp(log_numerator, dim=1, keepdim=True)
-        R = torch.exp(log_numerator - log_denominator)
-        ll_curr = log_denominator.sum().item()
+        ll_curr = 0.0
+        Nk = torch.zeros(K, device=device)
+        sum_x = torch.zeros(K, d, device=device)
+        sum_x2 = torch.zeros(K, d, device=device)
+
+        for start in range(0, N, batch_size):
+            end = min(start + batch_size, N)
+            Xb = X_t[start:end]      # (b, d)
+            Xb2 = Xb ** 2
+            mahal = Xb2 @ inv_var.T - 2 * (Xb @ mu_invvar.T) + mu2_invvar_sum[None, :]  # (b, K)
+            log_gaussian = -0.5 * (mahal + log_var_sum[None, :] + log_2pi_d)
+
+            log_numerator = log_weights[None, :] + log_gaussian
+            log_denominator = torch.logsumexp(log_numerator, dim=1, keepdim=True)
+            R = torch.exp(log_numerator - log_denominator)  # (b, K)
+            ll_curr += log_denominator.sum().item()
+
+            Nk += R.sum(dim=0)
+            sum_x += R.T @ Xb
+            sum_x2 += R.T @ Xb2
 
         # Maximization
-        Nk = R.sum(dim=0)
         alive = Nk > eps
 
         means_new = means.clone()
-        means_new[alive] = (R[:, alive].T @ X_t) / Nk[alive].unsqueeze(1)
+        means_new[alive] = sum_x[alive] / Nk[alive].unsqueeze(1)
 
-        diff = X_t[:, None, :] - means_new[None, :, :]
-        weighted_s_diff = R[:, :, None] * diff**2
+        # Var[x] = E[x^2] - E[x]^2, computed from the batched sufficient statistics above
         variance_new = variance.clone()
-        variance_new[alive] = weighted_s_diff[:, alive, :].sum(dim=0) / Nk[alive].unsqueeze(1)
+        variance_new[alive] = sum_x2[alive] / Nk[alive].unsqueeze(1) - means_new[alive] ** 2
         variance_new = torch.clamp(variance_new, min=1e-6)
 
         weights_new = weights.clone()
