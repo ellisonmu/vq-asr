@@ -58,24 +58,28 @@ def train(X, bitdepth=8, algorithm="kmeans"):
     K = 2**bitdepth
     return ALGORITHMS[algorithm](X, K)
 
-def evaluate(model, test_dataset, codebook):
+def evaluate(model, test_dataset, codebook=None, quantize=True):
     wer_hist, cer_hist = [], []
     fp16 = model.device.type == "cuda"  # fp16 decoding is unsupported on cpu/mps
     for utterance in tqdm(test_dataset, desc="evaluating"):
-        mel_q, ref_norm = front_end(utterance, quantize=True, codebook=codebook)
+        mel_q, ref_norm = front_end(utterance, quantize=quantize, codebook=codebook)
         mel_torch = torch.from_numpy(mel_q).to(model.device)
-        options = whisper.DecodingOptions(fp16=fp16)
+        options = whisper.DecodingOptions(fp16=fp16, language="en", task="transcribe")
         pred = whisper.decode(model, mel_torch, options)
         pred_norm = normalizer(pred.text)
         wer_hist.append(jiwer.wer(ref_norm, pred_norm))
         cer_hist.append(jiwer.cer(ref_norm, pred_norm))
     return np.mean(wer_hist), np.mean(cer_hist), np.std(wer_hist), np.std(cer_hist)
 
-def plot_sweep(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist, algorithm="kmeans"):
+def plot_sweep(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist, algorithm="kmeans", baseline_wer=None, baseline_cer=None):
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.errorbar(bitdepth, mean_wer_hist, yerr=std_wer_hist, label="WER", marker="o", capsize=3)
-    ax.errorbar(bitdepth, mean_cer_hist, yerr=std_cer_hist, label="CER", marker="o", capsize=3)
+    ax.errorbar(bitdepth, mean_wer_hist, yerr=std_wer_hist, label="WER", marker="o", capsize=3, color="tab:blue")
+    ax.errorbar(bitdepth, mean_cer_hist, yerr=std_cer_hist, label="CER", marker="o", capsize=3, color="tab:orange")
+    if baseline_wer is not None:
+        ax.axhline(baseline_wer, color="tab:blue", linestyle="--", label="WER (unquantized)")
+    if baseline_cer is not None:
+        ax.axhline(baseline_cer, color="tab:orange", linestyle="--", label="CER (unquantized)")
     ax.set_xlabel("bit depth")
     ax.set_ylabel("error rate")
     ax.set_title(f"WER / CER vs codebook bit depth ({algorithm})")
@@ -87,10 +91,12 @@ def plot_sweep(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_his
 
 def main(algorithm="kmeans"):
     mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist = [], [], [], []
-    bitdepth = list(range(1, 13))
+    bitdepth = list(range(1, 10))
     X = extract_train_features()
     model = whisper.load_model("base").to(get_device())
     test_dataset = load_split("test.clean").shuffle().select(range(1000))
+    baseline_wer, baseline_cer, _, _ = evaluate(model, test_dataset, quantize=False)
+    print(f"unquantized baseline: WER={baseline_wer:.3f} CER={baseline_cer:.3f}")
     for b in bitdepth:
         codebook = train(X, b, algorithm=algorithm)
         wer_mean, cer_mean, wer_std, cer_std = evaluate(model, test_dataset, codebook)
@@ -98,7 +104,8 @@ def main(algorithm="kmeans"):
         mean_cer_hist.append(cer_mean)
         std_wer_hist.append(wer_std)
         std_cer_hist.append(cer_std)
-    plot_sweep(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist, algorithm=algorithm)
+    plot_sweep(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist, algorithm=algorithm,
+               baseline_wer=baseline_wer, baseline_cer=baseline_cer)
 
 if __name__ == "__main__":
     import argparse
