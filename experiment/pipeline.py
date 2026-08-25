@@ -58,14 +58,35 @@ def train(X, bitdepth=8, algorithm="kmeans"):
     K = 2**bitdepth
     return ALGORITHMS[algorithm](X, K)
 
+def decode_with_fallback(model, mel_torch, fp16, temperatures=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+                          compression_ratio_threshold=2.4, logprob_threshold=-1.0, no_speech_threshold=0.6):
+    # mirrors whisper.transcribe()'s decode_with_fallback: retries at increasing temperature
+    # when the greedy decode looks like a repetition loop or garbage, instead of trusting
+    # a single low-level whisper.decode() pass on out-of-distribution (quantized) audio.
+    result = None
+    for t in temperatures:
+        options = whisper.DecodingOptions(fp16=fp16, language="en", task="transcribe", temperature=t)
+        result = whisper.decode(model, mel_torch, options)
+
+        needs_fallback = False
+        if compression_ratio_threshold is not None and result.compression_ratio > compression_ratio_threshold:
+            needs_fallback = True
+        if logprob_threshold is not None and result.avg_logprob < logprob_threshold:
+            needs_fallback = True
+        if (no_speech_threshold is not None and result.no_speech_prob > no_speech_threshold
+                and logprob_threshold is not None and result.avg_logprob < logprob_threshold):
+            needs_fallback = False
+        if not needs_fallback:
+            break
+    return result
+
 def evaluate(model, test_dataset, codebook=None, quantize=True):
     wer_hist, cer_hist = [], []
     fp16 = model.device.type == "cuda"  # fp16 decoding is unsupported on cpu/mps
     for utterance in tqdm(test_dataset, desc="evaluating"):
         mel_q, ref_norm = front_end(utterance, quantize=quantize, codebook=codebook)
         mel_torch = torch.from_numpy(mel_q).to(model.device)
-        options = whisper.DecodingOptions(fp16=fp16, language="en", task="transcribe")
-        pred = whisper.decode(model, mel_torch, options)
+        pred = decode_with_fallback(model, mel_torch, fp16)
         pred_norm = normalizer(pred.text)
         wer_hist.append(jiwer.wer(ref_norm, pred_norm))
         cer_hist.append(jiwer.cer(ref_norm, pred_norm))
