@@ -32,9 +32,10 @@ def read_audio(utterance):
     assert sr == whisper.audio.SAMPLE_RATE, f"expected {whisper.audio.SAMPLE_RATE} Hz, got {sr}"
     return x
 
-def front_end(utterance, quantize=False, codebook=None):
+def front_end(utterance, quantize=False, codebook=None, pad=True):
     x = normalize(read_audio(utterance))
-    x = whisper.pad_or_trim(x)
+    if pad:
+        x = whisper.pad_or_trim(x)
     x_mel = whisper.log_mel_spectrogram(x)
     mel = x_mel.numpy()
     ref = utterance["text"]
@@ -52,7 +53,7 @@ def front_end(utterance, quantize=False, codebook=None):
 def extract_train_features():
     ds = load_split("train.clean.100", streaming=True)
     train_subset = tqdm(islice(ds, 5000), total=5000, desc="extracting train features")
-    return np.concatenate([front_end(u, quantize=False)[0].T for u in train_subset], axis=0)  # (total_frames, 80)
+    return np.concatenate([front_end(u, quantize=False, pad=False)[0].T for u in train_subset], axis=0)  # (total_frames, 80)
 
 def train(X, bitdepth=8, algorithm="kmeans"):
     K = 2**bitdepth
