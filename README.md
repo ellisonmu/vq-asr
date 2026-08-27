@@ -1,4 +1,4 @@
-# hardware-aware-ml
+# vq-asr
 
 ## Goal
 
