@@ -1,8 +1,10 @@
+import io
 import numpy as np
 import matplotlib.pyplot as plt
+import soundfile as sf
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
-from datasets import load_dataset
+from datasets import load_dataset, Audio
 import whisper
 
 from operations.spectrogram import log_mel_spectrogram
@@ -16,12 +18,17 @@ def load_frame_vectors(n_utterances=N_UTTERANCES, frames_per_utterance=FRAMES_PE
     Returns X: (N, 80) array of mel frame vectors, one row per time frame,
     pooled across a subset of LibriSpeech clean utterances.
     """
-    dataset = load_dataset("librispeech_asr", "all", split="test.clean").shuffle(seed=seed).select(range(n_utterances))
+    dataset = load_dataset("openslr/librispeech_asr", "all", split="test.clean")
+    dataset = dataset.cast_column("audio", Audio(decode=False))
+    dataset = dataset.shuffle(seed=seed).select(range(n_utterances))
 
     rng = np.random.default_rng(seed)
     vectors = []
     for utterance in dataset:
-        audio = np.asarray(utterance["audio"]["array"], dtype=np.float32)
+        audio, sr = sf.read(io.BytesIO(utterance["audio"]["bytes"]), dtype="float32")
+        if audio.ndim > 1:
+            audio = audio.mean(axis=1)
+        assert sr == whisper.audio.SAMPLE_RATE, f"expected {whisper.audio.SAMPLE_RATE} Hz, got {sr}"
         mel = whisper.log_mel_spectrogram(audio)      # (80, frames)
         mel = mel.numpy()
         frames = mel.T                        # (frames, 80)

@@ -1,3 +1,4 @@
+import csv
 import io
 import numpy as np
 import jiwer
@@ -93,6 +94,17 @@ def evaluate(model, test_dataset, codebook=None, quantize=True):
         cer_hist.append(jiwer.cer(ref_norm, pred_norm))
     return np.mean(wer_hist), np.mean(cer_hist), np.std(wer_hist), np.std(cer_hist)
 
+def save_sweep_csv(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist, algorithm="kmeans", baseline_wer=None, baseline_cer=None):
+    out_path = f"experiment/wer_cer_sweep_{algorithm}.csv"
+    with open(out_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["resolution_bits", "wer_mean", "wer_std", "cer_mean", "cer_std"])
+        for b, wer_mean, wer_std, cer_mean, cer_std in zip(bitdepth, mean_wer_hist, std_wer_hist, mean_cer_hist, std_cer_hist):
+            writer.writerow([b, wer_mean, wer_std, cer_mean, cer_std])
+        if baseline_wer is not None or baseline_cer is not None:
+            writer.writerow(["unquantized", baseline_wer, "", baseline_cer, ""])
+    print(f"saved {out_path}")
+
 def plot_sweep(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist, algorithm="kmeans", baseline_wer=None, baseline_cer=None):
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -102,9 +114,9 @@ def plot_sweep(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_his
         ax.axhline(baseline_wer, color="tab:blue", linestyle="--", label="WER (unquantized)")
     if baseline_cer is not None:
         ax.axhline(baseline_cer, color="tab:orange", linestyle="--", label="CER (unquantized)")
-    ax.set_xlabel("bit depth")
+    ax.set_xlabel("resolution (bits)")
     ax.set_ylabel("error rate")
-    ax.set_title(f"WER / CER vs codebook bit depth ({algorithm})")
+    ax.set_title(f"WER / CER vs codebook resolution ({algorithm})")
     ax.legend()
     fig.tight_layout()
     out_path = f"experiment/wer_cer_sweep_{algorithm}.png"
@@ -113,7 +125,7 @@ def plot_sweep(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_his
 
 def main(algorithm="kmeans"):
     mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist = [], [], [], []
-    bitdepth = list(range(1, 10))
+    bitdepth = list(range(1, 12))
     X = extract_train_features()
     model = whisper.load_model("base").to(get_device())
     test_dataset = load_split("test.clean").shuffle().select(range(1000))
@@ -128,6 +140,8 @@ def main(algorithm="kmeans"):
         std_cer_hist.append(cer_std)
     plot_sweep(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist, algorithm=algorithm,
                baseline_wer=baseline_wer, baseline_cer=baseline_cer)
+    save_sweep_csv(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist, algorithm=algorithm,
+                   baseline_wer=baseline_wer, baseline_cer=baseline_cer)
 
 if __name__ == "__main__":
     import argparse
