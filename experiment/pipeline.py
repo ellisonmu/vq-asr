@@ -56,8 +56,8 @@ def extract_train_features():
     train_subset = tqdm(islice(ds, 5000), total=5000, desc="extracting train features")
     return np.concatenate([front_end(u, quantize=False, pad=False)[0].T for u in train_subset], axis=0)  # (total_frames, 80)
 
-def train(X, bitdepth=8, algorithm="kmeans"):
-    K = 2**bitdepth
+def train(X, b=8, algorithm="kmeans"):
+    K = 2**b
     return ALGORITHMS[algorithm](X, K)
 
 def decode_with_fallback(model, mel_torch, fp16, temperatures=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
@@ -125,22 +125,22 @@ def plot_sweep(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_his
 
 def main(algorithm="kmeans"):
     mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist = [], [], [], []
-    bitdepth = list(range(1, 12))
+    B = list(range(1, 11))
     X = extract_train_features()
     model = whisper.load_model("base").to(get_device())
     test_dataset = load_split("test.clean").shuffle().select(range(1000))
     baseline_wer, baseline_cer, _, _ = evaluate(model, test_dataset, quantize=False)
     print(f"unquantized baseline: WER={baseline_wer:.3f} CER={baseline_cer:.3f}")
-    for b in bitdepth:
+    for b in B:
         codebook = train(X, b, algorithm=algorithm)
         wer_mean, cer_mean, wer_std, cer_std = evaluate(model, test_dataset, codebook)
         mean_wer_hist.append(wer_mean)
         mean_cer_hist.append(cer_mean)
         std_wer_hist.append(wer_std)
         std_cer_hist.append(cer_std)
-    plot_sweep(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist, algorithm=algorithm,
+    plot_sweep(B, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist, algorithm=algorithm,
                baseline_wer=baseline_wer, baseline_cer=baseline_cer)
-    save_sweep_csv(bitdepth, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist, algorithm=algorithm,
+    save_sweep_csv(B, mean_wer_hist, mean_cer_hist, std_wer_hist, std_cer_hist, algorithm=algorithm,
                    baseline_wer=baseline_wer, baseline_cer=baseline_cer)
 
 if __name__ == "__main__":
