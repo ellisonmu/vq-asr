@@ -52,7 +52,7 @@ def gmmem(X, K, d=80, eps=1e-5, MAX_ITERATIONS=100, device=None, batch_size=1638
     log_2pi_d = d * np.log(2 * np.pi)
     pbar = tqdm(total=MAX_ITERATIONS, desc=f"gmmem K={K} ({device})")
     while m < MAX_ITERATIONS:
-        # diagonal-covariance Mahalanobis distance, expanded to avoid an (N, K, d) tensor:
+        # diagonal-covariance Mahalanobis distance
         # sum_d (x_d - mu_kd)^2 / var_kd = x^2 @ (1/var)^T - 2 x @ (mu/var)^T + sum_d mu_kd^2/var_kd
         inv_var = 1.0 / variance                                    # (K, d)
         mu_invvar = means * inv_var                                 # (K, d)
@@ -87,7 +87,7 @@ def gmmem(X, K, d=80, eps=1e-5, MAX_ITERATIONS=100, device=None, batch_size=1638
         means_new = means.clone()
         means_new[alive] = sum_x[alive] / Nk[alive].unsqueeze(1)
 
-        # Var[x] = E[x^2] - E[x]^2, computed from the batched sufficient statistics above
+        # Var[x] = E[x^2] - E[x]^2
         variance_new = variance.clone()
         variance_new[alive] = sum_x2[alive] / Nk[alive].unsqueeze(1) - means_new[alive] ** 2
         variance_new = torch.clamp(variance_new, min=1e-6)
